@@ -1,0 +1,112 @@
+# Dependencies
+node_modules/
+jspm_packages/
+
+# Build outputs
+out/
+dist/
+out-test/
+release/
+release-v*/
+release-v*.*/
+release-*.bak/
+
+# Logs
+*.log
+dev-*.log
+test-*.log
+typecheck-*.log
+release-build-*.log
+dev-v*.log
+
+# Screenshots (dev/build 临时产物,verifier 截图存 .verify/)
+dev-screenshot.png
+build-screenshot.png
+build-screenshot-*.png
+v0.*-screenshot.*
+v0.*-about-diagnostics.*
+e2e-*.png
+verify-*.png
+screenshot-*.png
+e2e-after-click.png
+e2e-main.png
+e2e-window.png
+e2e-restore.png
+e2e-restored.png
+
+# Verifier temp workspace
+.verify/
+.verify-*/
+
+# temp builder outputs
+electron-builder-v*.yml
+electron-builder-v*.yml.used
+_v04_build_report.merged
+release-v01.bak/
+release-v03/
+release-v04.merged/
+release-v041.merged/
+release-v041f.merged/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Local config
+*.local
+.env*
+.env.local
+.cache/
+.tmp/
+temp/
+tmp/
+
+# misc dev artifacts
+enum-windows.ps1
+find-*.ps1
+list-*.ps1
+take-*.ps1
+snap-*.ps1
+diag*.ps1
+click-add.ps1
+restore.ps1
+scan*.ps1
+crop-*.ps1
+inspect-*.ps1
+ui-probe.ps1
+
+# vite dev mode hash-named bundles
+index-*.js
+index-*.css
+
+# verifier one-off screenshots
+rb-*.png
+rb-top.png
+rb-only.png
+ui-probe-*.png
+
+# Mavis agent team internal files
+.mavis/
+
+# Build / verify logs (changelog is in deliverable.md)
+dev-run.log
+dev-v*.log
+test-v*.log
+typecheck-v*.log
+build-v*.log
+release-build-v*.log
+npm-test.log
+
+# temp builder outputs (already covered by release-v*/)
+electron-builder-v*.yml
+electron-builder-v*.yml.used
+_v04_build_report.merged
+release-v01.bak/
+release-v03/
+release-v04.merged/
+release-v041.merged/
+release-v041f.merged/

@@ -1,0 +1,105 @@
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  gap: var(--space-4);
+}
+
+.left {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+.title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.count {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* v0.2: background-mode switch + bound window chip */
+.bgSwitch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+.bgSwitch:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.bgSwitch:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.bgSwitch input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: inherit;
+}
+.bgSwitchLabel {
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+}
+
+.boundTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  max-width: 360px;
+}
+.boundText {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.boundX {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--text-base);
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.boundX:hover {
+  background: var(--accent);
+  color: var(--text-inverse);
+}

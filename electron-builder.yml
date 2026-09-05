@@ -1,0 +1,40 @@
+appId: com.example.smart-keyboard
+productName: SmartKeyboard
+copyright: Copyright (c) 2026
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.{md,map}"
+  - "!**/{.editorconfig,.eslintrc*,.prettierrc*,.gitignore}"
+
+asar: true
+
+# Use the local electron dist from node_modules instead of downloading
+# (avoids npmmirror download issues for v32.3.3 zip)
+electronDist: node_modules/electron/dist
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: SmartKeyboard
+  uninstallDisplayName: SmartKeyboard
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
