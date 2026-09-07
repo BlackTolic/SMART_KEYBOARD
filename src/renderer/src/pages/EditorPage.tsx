@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStepsStore } from '../store/steps';
 import { useBindingStore } from '../store/binding';
-import type { Step, WindowInfo } from '@shared/types';
+import { useRunStore } from '../store/run';
+import type { Step, WindowInfo, ProgressEvent } from '@shared/types';
 import { RunBar } from '../components/RunBar';
 import { StepEditor } from '../components/StepEditor';
 import { WindowPicker } from '../components/WindowPicker';
-import { useSimulatorProgress } from '../hooks/useApi';
 import styles from './EditorPage.module.css';
 
 interface Props {
@@ -27,8 +27,14 @@ export function EditorPage({ theme, onToggleTheme }: Props) {
   const add = useStepsStore((s) => s.add);
   const stepsForDemo = useStepsStore((s) => s.steps);
 
-  const [runId] = useState(() => crypto.randomUUID());
-  const [isRunning, setIsRunning] = useState(false);
+  // v0.4.6: read run state from the module-level run store so
+  // the lock UI survives navigating to About and back. The
+  // store's currentRunId is the source of truth; the progress
+  // listener lives at App level (see App.tsx).
+  const isRunning = useRunStore((s) => s.isRunning);
+  const startRunStore = useRunStore((s) => s.startRun);
+  const cancelRunStore = useRunStore((s) => s.cancelRun);
+
   const [pickerOpen, setPickerOpen] = useState(false);
 
   // Dev-only: ?demo=1 in the URL pre-binds a fake window AND adds a
@@ -36,7 +42,10 @@ export function EditorPage({ theme, onToggleTheme }: Props) {
   // "目标：..." label, the 后台运行 switch, and the holdMs/intervalMs
   // fields. Adding &picker=1 also opens the WindowPicker modal on
   // mount so the screenshot can show the picker with a highlighted
-  // "current bound" row. No-op in production usage.
+  // "current bound" row. Adding &run=1 also flips the page into
+  // "running" mode (UI lock) without actually executing a sequence —
+  // used by the v0.4.2 screenshot harness to capture the locked state.
+  // No-op in production usage.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -51,49 +60,89 @@ export function EditorPage({ theme, onToggleTheme }: Props) {
       if (params.get('picker') === '1') {
         setPickerOpen(true);
       }
+      if (params.get('run') === '1') {
+        // Drive the run store directly so the locked UI shows up
+        // without actually executing a sequence.
+        startRunStore();
+      }
     } catch {
       /* ignore */
     }
-  }, [demoBind, add, stepsForDemo.length]);
+  }, [demoBind, add, stepsForDemo.length, startRunStore]);
 
-  const handleProgress = useCallback(
-    (e: {
-      runId: string;
-      stepId: string;
-      status: 'idle' | 'running' | 'done' | 'error' | 'looping';
-      message?: string;
-      loopCount?: number;
-    }) => {
-      if (e.runId !== runId) return;
-      setStatus(e.stepId, e.status, e.message, e.loopCount);
-    },
-    [runId, setStatus]
-  );
-
-  useSimulatorProgress(handleProgress);
+  // v0.4.6: scoped `inert`. v0.4.5 put `inert` on the page root,
+  // which had a side-effect of making the Stop button
+  // un-clickable while a run was in progress (the user could not
+  // cancel the run from the UI). The fix is to scope `inert` to
+  // just the step content area, NOT the entire page. The RunBar
+  // (which contains the Stop button) stays interactive so the
+  // user can always cancel. The StepEditor (which is what
+  // React was rerendering aggressively — the lock banner, the
+  // step inputs becoming disabled, etc.) is the subtree we
+  // actually need to keep focus-free.
+  const stepContentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = stepContentRef.current;
+    if (!el) return;
+    if (isRunning) {
+      el.setAttribute('inert', '');
+    } else {
+      el.removeAttribute('inert');
+    }
+  }, [isRunning]);
 
   async function handleRun() {
     if (isRunning) return;
     resetStatuses();
+    // v0.4.6: ask the run store for a runId. If a run is
+    // already in progress (e.g. because we navigated away and
+    // back during a previous run), startRun returns the existing
+    // id and we re-attach. Otherwise it generates a new id.
+    const runId = startRunStore();
     try {
       // Strip the status field when sending to main.
       const clean: Step[] = steps.map(({ status, message, loopCount, ...rest }) => rest);
-      // When background mode is on AND a window is bound, pass the
-      // hwnd to the runner. Otherwise omit it (defaults to no switch).
+      // v0.5-mini T2: pass the bound window's hwnd so the runner
+      // can resolve `{ kind: 'bound' }` steps (and steps that
+      // don't set a target) to it. Pass it regardless of the
+      // background-mode toggle — the toggle only controls whether
+      // SetForegroundWindow is called (via `targetHwnd`).
+      const boundHwnd = boundWindow ? boundWindow.hwnd : undefined;
       const targetHwnd = backgroundMode && boundWindow ? boundWindow.hwnd : undefined;
-      await window.api.simulator.execute({ steps: clean, runId, targetHwnd });
-     setIsRunning(true);
+      await window.api.simulator.execute({
+        steps: clean,
+        runId,
+        targetHwnd,
+        boundHwnd
+      });
     } catch (err) {
+      // IPC error: e.g. validation rejection, no handler installed.
+      // Release the lock so the user can recover without a page
+      // reload. The App-level progress listener will not fire for
+      // a run that never started in main, so we have to flip the
+      // store ourselves here.
       console.error('run failed', err);
-    } finally {
-      console.log('run finished');
-      // setIsRunning(false);
+      cancelRunStore(runId);
     }
   }
 
   async function handleCancel() {
-    await window.api.simulator.cancel(runId);
-    setIsRunning(false);
+    // v0.4.6: read the current runId from the store (not local
+    // state) because the page may have remounted after a
+    // navigation and the local state would have a stale value.
+    const currentRunId = useRunStore.getState().currentRunId;
+    if (currentRunId) {
+      try {
+        await window.api.simulator.cancel(currentRunId);
+      } catch (err) {
+        console.warn('cancel request failed (ignored):', err);
+      }
+      // Optimistically flip the store; the App-level progress
+      // listener will also fire finishRun when the cancelled
+      // event reaches us, but cancelRun is a no-op when the
+      // runId no longer matches, so calling it twice is safe.
+      cancelRunStore(currentRunId);
+    }
   }
 
   function handleClear() {
@@ -110,7 +159,6 @@ export function EditorPage({ theme, onToggleTheme }: Props) {
 
   return (
     <div className={styles.page}>
-      {JSON.stringify(isRunning)}
       <RunBar
         stepCount={steps.length}
         isRunning={isRunning}
@@ -122,7 +170,9 @@ export function EditorPage({ theme, onToggleTheme }: Props) {
         onOpenPicker={() => setPickerOpen(true)}
         onUnbindWindow={handleUnbindWindow}
       />
-      <StepEditor />
+      <div ref={stepContentRef} className={styles.stepContent}>
+        <StepEditor isRunning={isRunning} />
+      </div>
       <WindowPicker
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}

@@ -6,3 +6,16 @@
   min-height: 0;
   background: var(--bg-app);
 }
+
+/* v0.4.6: container for the step list + add-step button. The
+   `inert` attribute is set on this element (not on .page) while
+   a run is in progress, so the RunBar (which contains the Stop
+   button) stays clickable. The step content is what we actually
+   need to keep focus-free so React rerenders don't pull focus
+   back to SmartKeyboard. */
+.stepContent {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}

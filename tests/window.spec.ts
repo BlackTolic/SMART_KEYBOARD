@@ -14,8 +14,11 @@ const koffiMock = vi.hoisted(() => {
     GetClassNameW: [] as Array<{ hwnd: unknown; result: number }>,
     GetWindowThreadProcessId: [] as Array<{ hwnd: unknown; pid: number }>,
     GetCurrentProcessId: [] as unknown[],
+    GetCurrentThreadId: [] as unknown[],
     ShowWindow: [] as Array<{ hwnd: unknown; cmd: number }>,
     SetForegroundWindow: [] as Array<{ hwnd: unknown; ok: boolean }>,
+    AttachThreadInput: [] as Array<{ idAttach: number; idAttachTo: number; fAttach: boolean; ok: boolean }>,
+    AllowSetForegroundWindow: [] as Array<{ pid: number; ok: boolean }>,
     EnumWindows: [] as Array<{ ok: boolean }>,
     GetModuleFileNameExW: [] as Array<{ pid: number; result: number }>,
     OpenProcess: [] as Array<{ pid: number; ok: boolean }>,
@@ -26,6 +29,7 @@ const koffiMock = vi.hoisted(() => {
   // Behaviour is controlled per-test via the helpers below.
   const behavior: {
     myPid: number;
+    myTid: number;
     foregroundHwnd: bigint | null;
     foregroundPid: number;
     foregroundTitle: string;
@@ -45,6 +49,7 @@ const koffiMock = vi.hoisted(() => {
     protectedPids: Set<number>;
   } = {
     myPid: 9999,
+    myTid: 1,
     foregroundHwnd: null,
     foregroundPid: 1234,
     foregroundTitle: 'Notepad',
@@ -73,6 +78,7 @@ const koffiMock = vi.hoisted(() => {
       (calls as any)[k] = [];
     }
     behavior.myPid = 9999;
+    behavior.myTid = 1;
     behavior.foregroundHwnd = null;
     behavior.foregroundPid = 1234;
     behavior.foregroundTitle = 'Notepad';
@@ -153,6 +159,15 @@ const koffiMock = vi.hoisted(() => {
           return makeFunc('ShowWindow', (_hwnd: unknown, cmd: number) => true);
         case 'SetForegroundWindow':
           return makeFunc('SetForegroundWindow', (_hwnd: unknown) => behavior.setForegroundResult);
+        case 'AttachThreadInput':
+          return makeFunc('AttachThreadInput', (idAttach: number, idAttachTo: number, fAttach: boolean) => {
+            // v0.4.6: spoof the attach. In a real OS this would
+            // tie the two threads' input state together; the
+            // mock just records the call and reports success.
+            return true;
+          });
+        case 'AllowSetForegroundWindow':
+          return makeFunc('AllowSetForegroundWindow', (_pid: number) => true);
         case 'EnumWindows':
           return makeFunc('EnumWindows', (cbHandle: bigint, _lparam: unknown) => {
             const reg = calls.register.find((r) => r && (r as any).__handle === cbHandle);
@@ -193,6 +208,8 @@ const koffiMock = vi.hoisted(() => {
       switch (name) {
         case 'GetCurrentProcessId':
           return makeFunc('GetCurrentProcessId', () => behavior.myPid);
+        case 'GetCurrentThreadId':
+          return makeFunc('GetCurrentThreadId', () => behavior.myTid);
         case 'OpenProcess':
           return makeFunc('OpenProcess', (_access: number, _inherit: boolean, pid: number) => {
             if (behavior.protectedPids.has(pid)) return null;
@@ -424,6 +441,45 @@ describe('window: activateWindow', () => {
   it('returns false for invalid hwnd (0 or negative)', async () => {
     expect(await activateWindow(0)).toBe(false);
     expect(await activateWindow(-1)).toBe(false);
+  });
+
+  // v0.4.6: when SetForegroundWindow fails, the slow path
+  // should call AttachThreadInput(targetTid, currentTid) and
+  // AllowSetForegroundWindow(ASFW_ANY), then retry
+  // SetForegroundWindow. The test exercises this by setting
+  // setForegroundResult to false (so the first call fails) and
+  // verifying the side effects.
+  it('falls back to AttachThreadInput path when first SetForegroundWindow is refused', async () => {
+    koffiMock.behavior.setForegroundResult = false;
+    // Make the target window have a tid (5000) different from
+    // the mock's current thread tid (1) so AttachThreadInput
+    // is called.
+    koffiMock.behavior.foregroundHwnd = 0x3333n;
+    koffiMock.behavior.foregroundPid = 1234;
+    const ok = await activateWindow(0x3333);
+    // The fallback SetForegroundWindow also returns false
+    // (because setForegroundResult is false), so the function
+    // returns false — but the AttachThreadInput path WAS taken.
+    expect(ok).toBe(false);
+    expect(koffiMock.calls.AllowSetForegroundWindow.length).toBeGreaterThanOrEqual(1);
+    expect(koffiMock.calls.AttachThreadInput.length).toBeGreaterThanOrEqual(2); // attach + detach
+    // First attach: fAttach=true; last attach: fAttach=false
+    const a = koffiMock.calls.AttachThreadInput as unknown as Array<[number, number, boolean]>;
+    expect(a[0][2]).toBe(true);
+    expect(a[a.length - 1][2]).toBe(false);
+  });
+
+  // v0.4.6: when the fast path succeeds (setForegroundResult=true),
+  // we do NOT enter the AttachThreadInput path. The first
+  // SetForegroundWindow already won, so we shouldn't be paying
+  // for the cross-thread attach.
+  it('does not call AttachThreadInput when the fast path succeeds', async () => {
+    koffiMock.behavior.setForegroundResult = true;
+    koffiMock.behavior.foregroundHwnd = 0x4444n;
+    koffiMock.behavior.foregroundPid = 1234;
+    const ok = await activateWindow(0x4444);
+    expect(ok).toBe(true);
+    expect(koffiMock.calls.AttachThreadInput.length).toBe(0);
   });
 });
 

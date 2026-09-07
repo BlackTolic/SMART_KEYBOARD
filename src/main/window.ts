@@ -60,6 +60,34 @@ const GetCurrentProcessId = kernel32.func(
   'uint32_t __stdcall GetCurrentProcessId()'
 );
 
+const GetCurrentThreadId = kernel32.func(
+  'uint32_t __stdcall GetCurrentThreadId()'
+);
+
+// AttachThreadInput: "ties" the calling thread's input state to
+// the specified thread's input state, so the calling thread can
+// set the foreground window even when the OS would otherwise
+// refuse (the foreground-lock rule introduced in Vista). This is
+// the standard fix for "SetForegroundWindow silently fails when
+// our process is not the current foreground process".
+//
+// v0.4.6: introduced to fix the Foreground-Lock defect reported
+// in the v0.4.5 follow-up (see deliverable.md). The lifecycle
+// is attach -> SetForegroundWindow -> sleep(50) -> detach.
+const AttachThreadInput = user32.func(
+  'bool __stdcall AttachThreadInput(uint32_t idAttach, uint32_t idAttachTo, bool fAttach)'
+);
+
+// AllowSetForegroundWindow: lets the calling process set the
+// foreground window even if it is not currently the foreground
+// process. ASFW_ANY (0xFFFFFFFF) is the documented "any process"
+// value; some apps (especially games) set this to a specific PID
+// instead. We use ASFW_ANY because we don't know the target's
+// parent process identity in advance.
+const AllowSetForegroundWindow = user32.func(
+  'bool __stdcall AllowSetForegroundWindow(uint32_t dwProcessId)'
+);
+
 const ShowWindow = user32.func(
   'bool __stdcall ShowWindow(void* hWnd, int nCmdShow)'
 );
@@ -152,6 +180,115 @@ function readPid(hwnd: bigint): number {
   const out: number[] = [0];
   GetWindowThreadProcessId(hwnd, out);
   return out[0] ?? 0;
+}
+
+/**
+ * v0.5-mini: return the thread id of the thread that owns the given
+ * window's message queue (i.e. the thread that called CreateWindow
+ * for the window). Returns 0 on failure or non-Windows.
+ *
+ * The thread id is what `AttachThreadInput` expects as the
+ * idAttachTo argument. Without this, a runner can't reliably tie
+ * its input state to the target window's input state (a requirement
+ * for sending input that doesn't get filtered by the Foreground
+ * Lock).
+ */
+export function getWindowThreadId(hwnd: number): number {
+  if (process.platform !== 'win32') return 0;
+  if (!hwnd || hwnd <= 0) return 0;
+  try {
+    const out: number[] = [0];
+    // The koffi binding returns the thread id directly, but the MSDN
+    // signature is the same as the call we use here. We use the
+    // bind's return value rather than the out-parameter to avoid
+    // depending on the order in which koffi fills them.
+    const tid = Number(GetWindowThreadProcessId(BigInt(hwnd), out));
+    return Number.isFinite(tid) && tid > 0 ? tid : 0;
+  } catch (err) {
+    console.error(`[window] getWindowThreadId(${hwnd}) failed:`, err);
+    return 0;
+  }
+}
+
+/**
+ * v0.5-mini: lower-level AttachThreadInput control. Most callers should
+ * prefer `withAttachedInput`. This variant lets the caller split the
+ * attach → work → release sequence, e.g. when a single "attached" scope
+ * spans multiple discrete input events.
+ *
+ * The returned object's `release` is idempotent (calling it more than
+ * once is safe; subsequent calls are no-ops) so a caller that uses it
+ * inside a try/finally doesn't have to track whether they've already
+ * detached on the error path.
+ */
+export interface AttachedInput {
+  release: () => void;
+}
+
+export function attachInputToWindow(hwnd: number): AttachedInput {
+  const noop: AttachedInput = { release: () => {} };
+  if (process.platform !== 'win32') return noop;
+  if (!hwnd || hwnd <= 0) return noop;
+
+  const targetTid = getWindowThreadId(hwnd);
+  const myTid = GetCurrentThreadId();
+  if (!targetTid || targetTid === myTid) return noop;
+
+  const ok = !!AttachThreadInput(myTid, targetTid, true);
+  if (!ok) {
+    // Mirror the message in the original activateWindow slow path
+    // so that the user can spot the cause from the main-process
+    // console. This is rare in practice; the only documented
+    // failure mode is when the target thread is terminating.
+    console.warn(
+      `[window] AttachThreadInput(my=${myTid}, target=${targetTid}) refused; continuing without attachment`
+    );
+    return noop;
+  }
+  let released = false;
+  return {
+    release: () => {
+      if (released) return;
+      released = true;
+      try {
+        AttachThreadInput(myTid, targetTid, false);
+      } catch (err) {
+        console.error('[window] AttachThreadInput(detach) failed:', err);
+      }
+    }
+  };
+}
+
+/**
+ * v0.5-mini: run `fn` with the calling thread's input state attached
+ * to the thread that owns `hwnd`. On Windows, the OS treats our
+ * SendInput as if it came from the target process for the duration
+ * of the call — which is the cure for "the runner's clicks don't
+ * reach the bound window because the OS thinks the user didn't
+ * initiate the input" (Foreground Lock / cross-process focus rules).
+ *
+ * - On non-Windows: just runs `fn`, no-op.
+ * - For invalid hwnd (0/negative): just runs `fn`, no-op.
+ * - If the target thread id is 0 or equal to ours: just runs `fn`.
+ * - If `AttachThreadInput` is refused: logs a warning, runs `fn`
+ *   anyway. We never want to abort the user's recipe because of an
+ *   OS-level refusal.
+ * - The detach happens in `finally`, including when `fn` throws.
+ *
+ * The runner (T2) wraps each UIA step in a `withAttachedInput` call
+ * so that the UIA call lands in the target window's input state
+ * even after the user has Alt-Tab'd away mid-run.
+ */
+export async function withAttachedInput<T>(
+  hwnd: number,
+  fn: () => Promise<T> | T
+): Promise<T> {
+  const attached = attachInputToWindow(hwnd);
+  try {
+    return await fn();
+  } finally {
+    attached.release();
+  }
 }
 
 function readWindowRect(hwnd: bigint): { left: number; top: number; right: number; bottom: number; width: number; height: number } {
@@ -385,10 +522,41 @@ function toWindowInfo(w: RawWindow): WindowInfo {
 }
 
 /**
+ * v0.4.5: return the raw HWND currently in the foreground as a plain
+ * number (0 if no foreground / non-Windows). Used by the runner to
+ * verify focus didn't drift to SmartKeyboard between steps.
+ */
+export function getCurrentForegroundHwnd(): number {
+  if (process.platform !== 'win32') return 0;
+  try {
+    const h = GetForegroundWindow();
+    return Number(h) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Bring a window to the foreground. Returns true on success.
  * Uses ShowWindow(SW_RESTORE) + SetForegroundWindow. No attempt is
  * made to detach the input thread (AttachThreadInput); that's a v0.3
  * concern.
+ *
+ * v0.4.5: if the first SetForegroundWindow fails (Windows sometimes
+ * refuses if the calling thread isn't the foreground thread), we
+ * retry once after a short sleep. This makes activation more reliable
+ * when the runner is called from the IPC handler.
+ *
+ * v0.4.6: when the simple path fails (Windows Foreground Lock
+ * from a non-foreground process), the function now uses
+ * `AttachThreadInput` to spoof the runner's input identity,
+ * which bypasses the lock entirely. This is the fix for the
+ * Foreground-Lock defect reported in the v0.4.5 follow-up
+ * (user bound a window, switched to a browser mid-run, the
+ * browser received subsequent SendInput events because the
+ * runner could not re-acquire foreground on the bound window).
+ * Also calls `AllowSetForegroundWindow(ASFW_ANY)` to grant
+ * our process the right to set foreground when called.
  */
 export async function activateWindow(hwnd: number): Promise<boolean> {
   if (process.platform !== 'win32') return false;
@@ -397,7 +565,59 @@ export async function activateWindow(hwnd: number): Promise<boolean> {
     const h = BigInt(hwnd);
     ShowWindow(h, SW_RESTORE);
     ShowWindow(h, SW_SHOW);
-    return !!SetForegroundWindow(h);
+    // Fast path: try the plain call. If we're still in the
+    // foreground grace period (5s after our process was
+    // foreground, OR the user just clicked our Run button),
+    // this succeeds without the AttachThreadInput overhead.
+    if (SetForegroundWindow(h)) return true;
+    // v0.4.5: first attempt failed. We don't know whether the
+    // user is still in the "foreground grace period" (5s after
+    // our process was foreground) or whether the lock has been
+    // consumed by another process. Log it so the user can tell
+    // which is which from the main-process console.
+    console.warn(`[window] SetForegroundWindow(${hwnd}) refused (likely foreground lock; will try AttachThreadInput path)`);
+
+    // v0.4.6: slow path. We did not have foreground privilege,
+    // so we go through AttachThreadInput. This is the standard
+    // cure for Foreground Lock when the caller is not the
+    // current foreground process.
+    const tidBuf: number[] = [0];
+    GetWindowThreadProcessId(h, tidBuf);
+    const targetTid = tidBuf[0] ?? 0;
+    const currentTid = GetCurrentThreadId();
+    if (targetTid && targetTid !== currentTid) {
+      // Belt-and-suspenders: explicitly grant our process
+      // the right to set foreground. ASFW_ANY = 0xFFFFFFFF.
+      AllowSetForegroundWindow(0xffffffff);
+      // Attach our input thread to the target's input thread.
+      // While attached, the OS treats our SetForegroundWindow
+      // call as if it came from the target process, so the
+      // foreground-lock check is satisfied.
+      AttachThreadInput(currentTid, targetTid, true);
+      try {
+        ShowWindow(h, SW_RESTORE);
+        ShowWindow(h, SW_SHOW);
+        const ok = !!SetForegroundWindow(h);
+        // Give the OS a beat to commit the focus switch before
+        // we detach. Without this, the subsequent SendInput
+        // can land on the wrong window (the OS hasn't yet
+        // committed the foreground change).
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        if (!ok) {
+          console.warn(`[window] SetForegroundWindow(${hwnd}) refused even after AttachThreadInput`);
+        }
+        return ok;
+      } finally {
+        // Detach immediately. We never want to leave the
+        // threads attached for longer than necessary, because
+        // an attached thread inherits the target's input state
+        // including hooks / focus / capture.
+        AttachThreadInput(currentTid, targetTid, false);
+      }
+    }
+    // targetTid was 0 or equal to currentTid; nothing more we
+    // can do.
+    return false;
   } catch (err) {
     console.error('[window] activateWindow failed:', err);
     return false;
@@ -419,5 +639,12 @@ export const __test__ = {
   CloseHandle,
   GetClassNameW,
   GetWindowRect,
-  RECT
+  RECT,
+  // v0.5-mini: the new thread-attachment helpers depend on these
+  // three koffi binds. Tests can swap the implementation to drive
+  // specific attach/detach sequences without going through the
+  // real Win32 path.
+  GetWindowThreadProcessId,
+  GetCurrentThreadId,
+  AttachThreadInput
 };

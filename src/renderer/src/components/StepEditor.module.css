@@ -59,6 +59,33 @@
   align-items: center;
 }
 
+/* v0.4.2 — sequence lock banner shown while a run is in progress.
+   Uses the accent (--accent) at 0.08 alpha for a soft blue tint;
+   text stays at the full --accent so it remains readable on both
+   light and dark themes. The not-allowed cursor is purely
+   informational — the underlying controls carry their own
+   `disabled` attribute. */
+.lockBanner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: not-allowed;
+}
+.lockIcon {
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .picker {
   position: absolute;
   top: calc(100% + 6px);

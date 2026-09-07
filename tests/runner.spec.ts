@@ -34,7 +34,18 @@ vi.mock('@nut-tree/nut-js', () => ({
 vi.mock('../src/main/window.js', () => ({
   activateWindow: vi.fn().mockResolvedValue(true),
   getForegroundWindow: vi.fn().mockResolvedValue(null),
-  enumVisibleWindows: vi.fn().mockResolvedValue([])
+  // v0.4.5: runner now calls getCurrentForegroundHwnd before each
+  // step to verify focus didn't drift. Default mock returns the
+  // targetHwnd so the runner's re-activation branch is NOT taken
+  // (matches the existing v0.4.4 test expectations).
+  getCurrentForegroundHwnd: vi.fn().mockReturnValue(0),
+  enumVisibleWindows: vi.fn().mockResolvedValue([]),
+  // v0.5-mini T2: simulator's executeInputStep wraps nut-js calls
+  // in withAttachedInput(). Default mock just runs the inner fn
+  // so legacy tests don't see any behavior change.
+  withAttachedInput: vi.fn(async <T>(_hwnd: number, fn: () => Promise<T> | T) => fn()),
+  attachInputToWindow: vi.fn().mockReturnValue({ release: () => {} }),
+  getWindowThreadId: vi.fn().mockReturnValue(0)
 }));
 
 import { startRun, cancelRun, getActiveRun, awaitRun } from '../src/main/runner';

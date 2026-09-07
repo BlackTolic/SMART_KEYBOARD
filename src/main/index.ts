@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { registerIpc, unregisterIpc } from './ipc.js';
+import { initTSPlug } from './auto-plugin/tian-shi/loader.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -74,7 +75,11 @@ function createMainWindow(): BrowserWindow {
   return win;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // v0.6: 启动时探测 TSPlug.dll 是否可用。探测是异步的（要等 winax + COM 初始化），
+  // 我们在注册 IPC 之前 await，确保 simulator 收到的第一次 isTSPlugAvailable() 就有
+  // 稳定结果。探测失败不影响主流程：loader 内部会记录错误，simulator 走 nut-js fallback。
+  await initTSPlug();
   registerIpc();
   mainWindow = createMainWindow();
 

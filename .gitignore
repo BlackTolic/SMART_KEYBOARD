@@ -92,6 +92,17 @@ ui-probe-*.png
 # Mavis agent team internal files
 .mavis/
 
+# v0.6: 本地商业闭源插件二进制（天使插件 TSPlug.dll 等）
+# 这些 dll 是商业付费软件，**绝对不能 commit 到公开仓库**：
+#   - 公开分发 = 违反 EULA
+#   - 公开仓库也违反 npm/electron-builder 的 license 合规
+# 用户在自己机器本地用没问题（自负风险），但本仓库只保留 wrapper 代码。
+# 用户要使用插件功能时，自行把 dll 放到 src/auto-plugin/<plugin>/lib/ 目录。
+src/auto-plugin/*/lib/*.dll
+src/auto-plugin/*/lib/*.sys
+src/auto-plugin/*/lib/*.so
+src/auto-plugin/*/lib/*.dylib
+
 # Build / verify logs (changelog is in deliverable.md)
 dev-run.log
 dev-v*.log

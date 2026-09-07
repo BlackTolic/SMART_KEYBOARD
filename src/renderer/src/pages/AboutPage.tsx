@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { WindowDiagnostics } from '@shared/types';
+import type { WindowDiagnostics, PluginStatus } from '@shared/types';
 import { DEMO_DIAGNOSTICS, diagnosticsToText } from './AboutPage.helpers';
 import styles from './AboutPage.module.css';
 
@@ -171,6 +171,12 @@ function DiagnosticsSection() {
             {summary && <span className={styles.diagSummary}>{summary}</span>}
           </div>
 
+          {/* v0.6: TSPlug 状态行。诊断面板打开时一次性读取快照，
+              user 重启主进程才会变（因为 dll 注册是一次性事件）。 */}
+          <div className={styles.diagToolbar}>
+            <PluginStatusRow />
+          </div>
+
           {status === 'error' && (
             <div className={styles.diagError}>诊断失败：{error}</div>
           )}
@@ -234,4 +240,44 @@ function rowsToText(rows: WindowDiagnostics[]): string {
   // Delegate to the pure helper so the component + tests stay in
   // lockstep with the export in AboutPage.helpers.ts.
   return diagnosticsToText(rows);
+}
+
+// v0.6: TSPlug 状态行。展示在诊断面板头部，作为 "你机器上 dll 装没装 / 注册没注册" 的快查。
+// 只读：不展示任何 user 配置项（SetSimMode、Reg 等由 user 在 main 进程启动时自行控制）。
+function PluginStatusRow() {
+  const [status, setStatus] = useState<PluginStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const api = typeof window !== 'undefined' ? window.api : undefined;
+    if (!api?.plugin?.status) {
+      setError('plugin API unavailable');
+      return;
+    }
+    void api.plugin.status().then(setStatus).catch((e: unknown) => {
+      setError(e instanceof Error ? e.message : String(e));
+    });
+  }, []);
+
+  if (error) {
+    return (
+      <div className={styles.diagSummary}>
+        TSPlug: <strong>未知</strong> · {error}
+      </div>
+    );
+  }
+  if (!status) {
+    return <div className={styles.diagSummary}>TSPlug: 探测中…</div>;
+  }
+  if (status.available) {
+    return (
+      <div className={styles.diagSummary}>
+        TSPlug: <strong>已加载 v{status.version}</strong> · 后台键鼠模拟可用
+      </div>
+    );
+  }
+  return (
+    <div className={styles.diagSummary}>
+      TSPlug: <strong>未加载</strong> · {status.error ?? 'dll 缺失或未注册'} · 当前走 nut-js fallback
+    </div>
+  );
 }

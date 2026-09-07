@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Step, StepType, StepStatus } from '@shared/types';
+import type { Step, StepType, StepStatus, StepTarget, ElementSelector } from '@shared/types';
 
 export type StepState = Step & {
   status: StepStatus;
@@ -27,22 +27,65 @@ function uuid(): string {
   return 'id-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+/**
+ * v0.5-mini T3: every step type now carries an explicit `target`
+ * field.  Most recipes leave it at the default `{ kind: 'foreground' }`
+ * (or `{ kind: 'bound' }` once a window is bound), so we pre-fill
+ * the default to make the editor's "Add step" button land on a
+ * sensible value.  The T2 runner still falls back to the run-level
+ * `boundHwnd` when `target` is undefined, but the store now always
+ * sets it so the StepRow has something to render in the target row.
+ */
+const DEFAULT_TARGET: StepTarget = { kind: 'foreground' };
+
+/**
+ * Default selector for the four UIA step types.  Bare
+ * `{ name: '' }` is the most user-friendly starting point: it asks
+ * the user to type a label like "OK" or "登录" and the v0.5-mini
+ * PowerShell backend resolves it via NameProperty.
+ */
+const DEFAULT_SELECTOR: ElementSelector = { name: '' };
+
 function defaultStep(type: StepType): Step {
+  const base = (extra: Partial<Step>): Step => ({
+    ...(extra as object),
+    id: uuid(),
+    target: DEFAULT_TARGET
+  } as Step);
   switch (type) {
     case 'move':
-      return { id: uuid(), type: 'move', x: 0, y: 0, delayMs: 0 };
+      return base({ type: 'move', x: 0, y: 0, delayMs: 0 });
     case 'click':
-      return { id: uuid(), type: 'click', button: 'left', delayMs: 0 };
+      return base({ type: 'click', button: 'left', delayMs: 0 });
     case 'doubleClick':
-      return { id: uuid(), type: 'doubleClick', delayMs: 0 };
+      return base({ type: 'doubleClick', delayMs: 0 });
     case 'scroll':
-      return { id: uuid(), type: 'scroll', dx: 0, dy: 0, delayMs: 0 };
+      return base({ type: 'scroll', dx: 0, dy: 0, delayMs: 0 });
     case 'keyTap':
-      return { id: uuid(), type: 'keyTap', key: 'Enter', modifiers: [], holdMs: 50, intervalMs: 0, delayMs: 0 };
+      return base({
+        type: 'keyTap',
+        key: 'Enter',
+        modifiers: [],
+        holdMs: 50,
+        intervalMs: 0,
+        delayMs: 0
+      });
     case 'type':
-      return { id: uuid(), type: 'type', text: '', holdMs: 50, intervalMs: 0, delayMs: 0 };
+      return base({ type: 'type', text: '', holdMs: 50, intervalMs: 0, delayMs: 0 });
     case 'delay':
-      return { id: uuid(), type: 'delay', ms: 500 };
+      return base({ type: 'delay', ms: 500 });
+    // v0.5-mini T3: the four UIA step types now have full defaults
+    // including a target row.  The selector starts as `{ name: '' }`
+    // (the most common shape — automationId for legacy Win32 dialogs
+    // is rarer than a localised name like "确定" / "OK" / "登录").
+    case 'invokeElement':
+      return base({ type: 'invokeElement', selector: { ...DEFAULT_SELECTOR } });
+    case 'setText':
+      return base({ type: 'setText', selector: { ...DEFAULT_SELECTOR }, text: '' });
+    case 'getText':
+      return base({ type: 'getText', selector: { ...DEFAULT_SELECTOR } });
+    case 'focusElement':
+      return base({ type: 'focusElement', selector: { ...DEFAULT_SELECTOR } });
     default: {
       const _exhaustive: never = type;
       void _exhaustive;
